@@ -27,6 +27,8 @@ export type Shape = {
   name: string;
   color: string;
   meta: ShapeMeta;
+  // Shapes sharing a non-null groupId move/rotate/flip together.
+  groupId?: string | null;
 };
 
 export type Calibration = {

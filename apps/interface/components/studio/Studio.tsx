@@ -9,7 +9,14 @@ import type {
   Shape,
   ToolMode,
 } from "@/lib/studio/types";
-import { letterLabel, shapeBounds, shapeWorldVertices, uid } from "@/lib/studio/geometry";
+import {
+  groupBounds,
+  letterLabel,
+  rotateAround,
+  shapeBounds,
+  shapeWorldVertices,
+  uid,
+} from "@/lib/studio/geometry";
 
 const STORAGE_KEY = "footprint-studio-v1";
 
@@ -28,7 +35,8 @@ type Viewport = { zoom: number; pan: { x: number; y: number } };
 export default function Studio() {
   const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [shapes, setShapes] = useState<Shape[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const primarySelectedId = selectedIds.at(-1) ?? null;
   const [tool, setTool] = useState<ToolMode>("select");
   const [pendingShape, setPendingShape] = useState<PendingShape>(null);
   const [gridOn, setGridOn] = useState(true);
@@ -98,7 +106,7 @@ export default function Studio() {
         transform: { x: startX, y: startY, rotation: 0, flipX: false, flipY: false },
       };
       setShapes((prev) => [...prev, newShape]);
-      setSelectedId(id);
+      setSelectedIds([id]);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [calibration, floorPlan, shapes]
@@ -128,51 +136,159 @@ export default function Studio() {
     ]);
     setPendingShape(null);
     setTool("select");
-    setSelectedId(id);
+    setSelectedIds([id]);
   }
 
   function updateShape(id: string, patch: Partial<Shape>) {
     setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }
 
-  function deleteShape(id: string) {
-    setShapes((prev) => prev.filter((s) => s.id !== id));
-    if (selectedId === id) setSelectedId(null);
+  function deleteShapes(ids: string[]) {
+    setShapes((prev) => prev.filter((s) => !ids.includes(s.id)));
+    setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
   }
 
-  function duplicateShape(id: string) {
-    const s = shapes.find((x) => x.id === id);
-    if (!s) return;
-    const newId = uid();
-    const letter = nextLetter();
+  function duplicateShapes(ids: string[]) {
+    if (ids.length === 0) return;
     const offsetIn = 6;
-    setShapes((prev) => [
-      ...prev,
-      {
-        ...s,
-        id: newId,
-        letter,
-        transform: { ...s.transform, x: s.transform.x + offsetIn, y: s.transform.y + offsetIn },
-      },
-    ]);
-    setSelectedId(newId);
+    // preserve grouping among duplicated members by minting a fresh groupId
+    const sourceGroupIds = new Map<string, string>(); // old gid → new gid
+    const newIds: string[] = [];
+    setShapes((prev) => {
+      const used = new Set(prev.map((s) => s.letter));
+      let counter = 0;
+      function letter() {
+        while (used.has(letterLabel(counter))) counter++;
+        const l = letterLabel(counter);
+        used.add(l);
+        counter++;
+        return l;
+      }
+      const adds: Shape[] = [];
+      for (const id of ids) {
+        const s = prev.find((x) => x.id === id);
+        if (!s) continue;
+        let newGroupId: string | null = null;
+        if (s.groupId) {
+          if (!sourceGroupIds.has(s.groupId)) sourceGroupIds.set(s.groupId, uid());
+          newGroupId = sourceGroupIds.get(s.groupId)!;
+        }
+        const newId = uid();
+        newIds.push(newId);
+        adds.push({
+          ...s,
+          id: newId,
+          letter: letter(),
+          groupId: newGroupId,
+          transform: { ...s.transform, x: s.transform.x + offsetIn, y: s.transform.y + offsetIn },
+        });
+      }
+      return [...prev, ...adds];
+    });
+    setSelectedIds(newIds);
   }
 
-  function flipX(id: string) {
-    const s = shapes.find((x) => x.id === id);
-    if (!s) return;
-    updateShape(id, { transform: { ...s.transform, flipX: !s.transform.flipX } });
+  // ── group operations ────────────────────────────────────────────────────
+  // Rotate all members around the group's combined centroid by `deg`.
+  function rotateGroupAroundCentroid(ids: string[], deg: number) {
+    if (ids.length === 0 || deg === 0) return;
+    const idSet = new Set(ids);
+    const members = shapes.filter((s) => idSet.has(s.id));
+    if (members.length === 0) return;
+    const pivot = groupBounds(members);
+    setShapes((prev) =>
+      prev.map((s) => {
+        if (!idSet.has(s.id)) return s;
+        const np = rotateAround({ x: s.transform.x, y: s.transform.y }, { x: pivot.cx, y: pivot.cy }, deg);
+        return {
+          ...s,
+          transform: {
+            ...s.transform,
+            x: np.x,
+            y: np.y,
+            rotation: ((s.transform.rotation || 0) + deg) % 360,
+          },
+        };
+      })
+    );
   }
-  function flipY(id: string) {
-    const s = shapes.find((x) => x.id === id);
-    if (!s) return;
-    updateShape(id, { transform: { ...s.transform, flipY: !s.transform.flipY } });
+
+  // Rotate each member in place (around its own center) by `deg`.
+  function rotateEachInPlace(ids: string[], deg: number) {
+    if (ids.length === 0 || deg === 0) return;
+    const idSet = new Set(ids);
+    setShapes((prev) =>
+      prev.map((s) =>
+        idSet.has(s.id)
+          ? { ...s, transform: { ...s.transform, rotation: ((s.transform.rotation || 0) + deg) % 360 } }
+          : s
+      )
+    );
   }
-  function rotate90(id: string) {
-    const s = shapes.find((x) => x.id === id);
-    if (!s) return;
-    const r = (s.transform.rotation || 0) + 90;
-    updateShape(id, { transform: { ...s.transform, rotation: r % 360 } });
+
+  // Mirror horizontally: mirror each member's position around the group's vertical
+  // axis through centroid, negate rotation, toggle flipX.
+  function flipGroupX(ids: string[]) {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const members = shapes.filter((s) => idSet.has(s.id));
+    if (members.length === 0) return;
+    const pivot = groupBounds(members);
+    setShapes((prev) =>
+      prev.map((s) =>
+        idSet.has(s.id)
+          ? {
+              ...s,
+              transform: {
+                ...s.transform,
+                x: 2 * pivot.cx - s.transform.x,
+                rotation: -(s.transform.rotation || 0),
+                flipX: !s.transform.flipX,
+              },
+            }
+          : s
+      )
+    );
+  }
+
+  function flipGroupY(ids: string[]) {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const members = shapes.filter((s) => idSet.has(s.id));
+    if (members.length === 0) return;
+    const pivot = groupBounds(members);
+    setShapes((prev) =>
+      prev.map((s) =>
+        idSet.has(s.id)
+          ? {
+              ...s,
+              transform: {
+                ...s.transform,
+                y: 2 * pivot.cy - s.transform.y,
+                rotation: -(s.transform.rotation || 0),
+                flipY: !s.transform.flipY,
+              },
+            }
+          : s
+      )
+    );
+  }
+
+  // Group: assign a fresh groupId to selected shapes.
+  function groupSelected() {
+    if (selectedIds.length < 2) return;
+    const gid = uid();
+    const idSet = new Set(selectedIds);
+    setShapes((prev) => prev.map((s) => (idSet.has(s.id) ? { ...s, groupId: gid } : s)));
+  }
+
+  // Ungroup: clear groupId for the entire group containing any selected shape.
+  function ungroupSelected() {
+    const gids = new Set(
+      shapes.filter((s) => selectedIds.includes(s.id) && s.groupId).map((s) => s.groupId as string)
+    );
+    if (gids.size === 0) return;
+    setShapes((prev) => prev.map((s) => (s.groupId && gids.has(s.groupId) ? { ...s, groupId: null } : s)));
   }
   function sendBack(id: string) {
     setShapes((prev) => {
@@ -199,20 +315,21 @@ export default function Studio() {
       if (printing) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length) {
         e.preventDefault();
-        deleteShape(selectedId);
-      } else if (e.key === "d" && (e.metaKey || e.ctrlKey) && selectedId) {
+        deleteShapes(selectedIds);
+      } else if (e.key === "d" && (e.metaKey || e.ctrlKey) && selectedIds.length) {
         e.preventDefault();
-        duplicateShape(selectedId);
-      } else if (e.key === "r" && selectedId) {
-        rotate90(selectedId);
+        duplicateShapes(selectedIds);
+      } else if (e.key === "r" && selectedIds.length) {
+        // single → rotate self; group → rotate around centroid
+        rotateGroupAroundCentroid(selectedIds, 90);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, shapes, printing]);
+  }, [selectedIds, shapes, printing]);
 
   function onExport() {
     const data = { calibration, shapes, floorPlan, exportedAt: new Date().toISOString() };
@@ -237,7 +354,7 @@ export default function Studio() {
         if (j.calibration) setCalibration(j.calibration);
         if (Array.isArray(j.shapes)) setShapes(j.shapes);
         if (j.floorPlan) setFloorPlan(j.floorPlan);
-        setSelectedId(null);
+        setSelectedIds([]);
       } catch (err) {
         alert("couldn't read file: " + (err as Error).message);
       }
@@ -250,7 +367,7 @@ export default function Studio() {
     if (!confirm("clear all shapes and calibration?")) return;
     setShapes([]);
     setCalibration(null);
-    setSelectedId(null);
+    setSelectedIds([]);
   }
 
   // floor plan upload: read file → data URL → measure natural size → set state
@@ -274,7 +391,7 @@ export default function Studio() {
         // changing the plan invalidates the previous calibration
         setCalibration(null);
         setShapes([]);
-        setSelectedId(null);
+        setSelectedIds([]);
         setViewport({ zoom: 1, pan: { x: 0, y: 0 } });
       };
       img.src = dataUrl;
@@ -295,15 +412,27 @@ export default function Studio() {
     <div className={`studio ${printing ? "is-printing" : ""}`}>
       <Sidebar
         shapes={shapes}
-        selectedId={selectedId}
-        setSelectedId={setSelectedId}
+        selectedIds={selectedIds}
+        primarySelectedId={primarySelectedId}
+        setSelectedIds={setSelectedIds}
+        onSelectFromRow={(id, shift) => {
+          setSelectedIds((prev) => {
+            if (shift) {
+              return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+            }
+            return [id];
+          });
+        }}
         onAddShape={addShape}
         onUpdateShape={updateShape}
-        onDeleteShape={deleteShape}
-        onDuplicateShape={duplicateShape}
-        onFlipX={flipX}
-        onFlipY={flipY}
-        onRotate90={rotate90}
+        onDelete={() => deleteShapes(selectedIds)}
+        onDuplicate={() => duplicateShapes(selectedIds)}
+        onFlipH={() => flipGroupX(selectedIds)}
+        onFlipV={() => flipGroupY(selectedIds)}
+        onRotateGroup90={() => rotateGroupAroundCentroid(selectedIds, 90)}
+        onRotateEach90={() => rotateEachInPlace(selectedIds, 90)}
+        onGroup={groupSelected}
+        onUngroup={ungroupSelected}
         onSendBack={sendBack}
         onBringForward={bringForward}
         tool={tool}
@@ -325,8 +454,8 @@ export default function Studio() {
         <Canvas
           shapes={shapes}
           setShapes={setShapes}
-          selectedId={selectedId}
-          setSelectedId={setSelectedId}
+          selectedIds={selectedIds}
+          setSelectedIds={setSelectedIds}
           calibration={calibration}
           setCalibration={setCalibration}
           floorPlan={floorPlan}

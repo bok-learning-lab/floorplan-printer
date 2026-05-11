@@ -40,15 +40,20 @@ export type AddShapeSpec =
 
 type Props = {
   shapes: Shape[];
-  selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
+  selectedIds: string[];
+  primarySelectedId: string | null;
+  setSelectedIds: React.Dispatch<React.SetStateAction<string[]>>;
+  onSelectFromRow: (id: string, shift: boolean) => void;
   onAddShape: (spec: AddShapeSpec) => void;
   onUpdateShape: (id: string, patch: Partial<Shape>) => void;
-  onDeleteShape: (id: string) => void;
-  onDuplicateShape: (id: string) => void;
-  onFlipX: (id: string) => void;
-  onFlipY: (id: string) => void;
-  onRotate90: (id: string) => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onFlipH: () => void;
+  onFlipV: () => void;
+  onRotateGroup90: () => void;
+  onRotateEach90: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
   onSendBack: (id: string) => void;
   onBringForward: (id: string) => void;
   tool: ToolMode;
@@ -68,7 +73,13 @@ type Props = {
 
 export function Sidebar(p: Props) {
   const [creating, setCreating] = useState<null | "rect" | "lshape" | "polygon">(null);
-  const selected = p.shapes.find((s) => s.id === p.selectedId);
+  const primary = p.shapes.find((s) => s.id === p.primarySelectedId);
+  const selectedShapes = p.shapes.filter((s) => p.selectedIds.includes(s.id));
+  const isMulti = selectedShapes.length > 1;
+  const anySelectedIsGrouped = selectedShapes.some((s) => !!s.groupId);
+  const allSameGroup =
+    selectedShapes.length > 0 &&
+    selectedShapes.every((s) => s.groupId && s.groupId === selectedShapes[0].groupId);
 
   return (
     <aside className="sidebar">
@@ -148,18 +159,42 @@ export function Sidebar(p: Props) {
             )}
           </Section>
 
-          {selected && (
-            <Section label={`selected · ${selected.letter}`}>
+          {isMulti && (
+            <Section label={`selection · ${selectedShapes.length} shapes${allSameGroup ? " · grouped" : ""}`}>
+              <GroupPanel
+                canGroup={selectedShapes.length >= 2 && !allSameGroup}
+                canUngroup={anySelectedIsGrouped}
+                onGroup={p.onGroup}
+                onUngroup={p.onUngroup}
+                onDuplicate={p.onDuplicate}
+                onDelete={p.onDelete}
+                onFlipH={p.onFlipH}
+                onFlipV={p.onFlipV}
+                onRotateGroup90={p.onRotateGroup90}
+                onRotateEach90={p.onRotateEach90}
+              />
+            </Section>
+          )}
+
+          {!isMulti && primary && (
+            <Section label={`selected · ${primary.letter}${primary.groupId ? " · in group" : ""}`}>
               <SelectedPanel
-                shape={selected}
-                onUpdate={(patch) => p.onUpdateShape(selected.id, patch)}
-                onDelete={() => p.onDeleteShape(selected.id)}
-                onDuplicate={() => p.onDuplicateShape(selected.id)}
-                onFlipX={() => p.onFlipX(selected.id)}
-                onFlipY={() => p.onFlipY(selected.id)}
-                onRotate90={() => p.onRotate90(selected.id)}
-                onSendBack={() => p.onSendBack(selected.id)}
-                onBringForward={() => p.onBringForward(selected.id)}
+                shape={primary}
+                inGroup={!!primary.groupId}
+                onUpdate={(patch) => p.onUpdateShape(primary.id, patch)}
+                onDelete={p.onDelete}
+                onDuplicate={p.onDuplicate}
+                onFlipX={p.onFlipH}
+                onFlipY={p.onFlipV}
+                onRotate90={p.onRotateGroup90}
+                onSendBack={() => p.onSendBack(primary.id)}
+                onBringForward={() => p.onBringForward(primary.id)}
+                onSelectWholeGroup={() => {
+                  if (!primary.groupId) return;
+                  const ids = p.shapes.filter((s) => s.groupId === primary.groupId).map((s) => s.id);
+                  p.setSelectedIds(ids);
+                }}
+                onUngroup={p.onUngroup}
               />
             </Section>
           )}
@@ -171,10 +206,13 @@ export function Sidebar(p: Props) {
                 <ObjectRow
                   key={s.id}
                   shape={s}
-                  selected={s.id === p.selectedId}
-                  onSelect={() => p.setSelectedId(s.id)}
+                  selected={p.selectedIds.includes(s.id)}
+                  onSelect={(shift) => p.onSelectFromRow(s.id, shift)}
                   onRename={(name) => p.onUpdateShape(s.id, { name })}
-                  onDelete={() => p.onDeleteShape(s.id)}
+                  onDelete={() => {
+                    p.setSelectedIds([s.id]);
+                    p.onDelete();
+                  }}
                 />
               ))}
             </div>
@@ -442,6 +480,7 @@ function NameAndColor({
 
 function SelectedPanel({
   shape,
+  inGroup,
   onUpdate,
   onDelete,
   onDuplicate,
@@ -450,8 +489,11 @@ function SelectedPanel({
   onRotate90,
   onSendBack,
   onBringForward,
+  onSelectWholeGroup,
+  onUngroup,
 }: {
   shape: Shape;
+  inGroup: boolean;
   onUpdate: (patch: Partial<Shape>) => void;
   onDelete: () => void;
   onDuplicate: () => void;
@@ -460,9 +502,21 @@ function SelectedPanel({
   onRotate90: () => void;
   onSendBack: () => void;
   onBringForward: () => void;
+  onSelectWholeGroup: () => void;
+  onUngroup: () => void;
 }) {
   return (
     <div className="form">
+      {inGroup && (
+        <div className="form-actions" style={{ justifyContent: "stretch", marginBottom: 4 }}>
+          <button className="btn btn--ghost" onClick={onSelectWholeGroup} style={{ flex: 1 }} title="select all members">
+            select group
+          </button>
+          <button className="btn btn--ghost" onClick={onUngroup} style={{ flex: 1 }} title="ungroup">
+            ungroup
+          </button>
+        </div>
+      )}
       <label className="diminput">
         <span className="diminput-label">name</span>
         <input
@@ -522,6 +576,73 @@ function SelectedPanel({
   );
 }
 
+function GroupPanel({
+  canGroup,
+  canUngroup,
+  onGroup,
+  onUngroup,
+  onDuplicate,
+  onDelete,
+  onFlipH,
+  onFlipV,
+  onRotateGroup90,
+  onRotateEach90,
+}: {
+  canGroup: boolean;
+  canUngroup: boolean;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onFlipH: () => void;
+  onFlipV: () => void;
+  onRotateGroup90: () => void;
+  onRotateEach90: () => void;
+}) {
+  return (
+    <div className="form">
+      <div className="form-actions" style={{ justifyContent: "stretch", marginBottom: 4 }}>
+        {canGroup && (
+          <button className="btn btn--primary" onClick={onGroup} style={{ flex: 1 }} title="lock these as a group">
+            group
+          </button>
+        )}
+        {canUngroup && (
+          <button className="btn btn--ghost" onClick={onUngroup} style={{ flex: 1 }} title="ungroup">
+            ungroup
+          </button>
+        )}
+      </div>
+      <div className="form-section-label">rotate</div>
+      <div className="action-grid">
+        <button className="btn btn--ghost" onClick={onRotateGroup90} title="rotate 90° around the group's centroid">
+          ⟳ 90° together
+        </button>
+        <button className="btn btn--ghost" onClick={onRotateEach90} title="rotate each shape 90° in place">
+          ⟳ 90° each
+        </button>
+      </div>
+      <div className="form-section-label">mirror</div>
+      <div className="action-grid">
+        <button className="btn btn--ghost" onClick={onFlipH} title="mirror horizontally across the group's centroid">
+          ⇆ flip H
+        </button>
+        <button className="btn btn--ghost" onClick={onFlipV} title="mirror vertically across the group's centroid">
+          ⇅ flip V
+        </button>
+      </div>
+      <div className="action-grid">
+        <button className="btn btn--ghost" onClick={onDuplicate} title="duplicate selection">
+          ⧉ duplicate
+        </button>
+        <button className="btn btn--danger" onClick={onDelete}>
+          delete all
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ObjectRow({
   shape,
   selected,
@@ -531,7 +652,7 @@ function ObjectRow({
 }: {
   shape: Shape;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shift: boolean) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
 }) {
@@ -540,7 +661,10 @@ function ObjectRow({
   useEffect(() => setVal(shape.name || ""), [shape.name]);
 
   return (
-    <div className={`object-row ${selected ? "is-selected" : ""}`} onClick={onSelect}>
+    <div
+      className={`object-row ${selected ? "is-selected" : ""}${shape.groupId ? " is-grouped" : ""}`}
+      onClick={(e) => onSelect(e.shiftKey)}
+    >
       <div className="object-letter" style={{ background: shape.color }}>
         {shape.letter}
       </div>

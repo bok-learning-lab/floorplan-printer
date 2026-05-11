@@ -92,6 +92,38 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 9);
 }
 
+// ── Group helpers ───────────────────────────────────────────────────────────
+// Set of shape IDs that belong to the same group as `id` (or just [id]).
+export function groupMemberIds(shapes: Shape[], id: string): string[] {
+  const s = shapes.find((x) => x.id === id);
+  if (!s || !s.groupId) return [id];
+  const gid = s.groupId;
+  return shapes.filter((x) => x.groupId === gid).map((x) => x.id);
+}
+
+// Combined bounding box of multiple shapes (union of each shape's bbox).
+export function groupBounds(shapes: Shape[]): Bounds {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of shapes) {
+    const b = shapeBounds(s);
+    if (b.minX < minX) minX = b.minX;
+    if (b.minY < minY) minY = b.minY;
+    if (b.maxX > maxX) maxX = b.maxX;
+    if (b.maxY > maxY) maxY = b.maxY;
+  }
+  return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+// Rotate point (x,y) around pivot by deg degrees.
+export function rotateAround(p: Point, pivot: Point, deg: number): Point {
+  const r = (deg * Math.PI) / 180;
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  const dx = p.x - pivot.x;
+  const dy = p.y - pivot.y;
+  return { x: pivot.x + dx * c - dy * s, y: pivot.y + dx * s + dy * c };
+}
+
 // Edge-snap: align moving shape's bbox edges/center to other shapes' edges.
 export function edgeSnap(
   moving: Shape,

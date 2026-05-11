@@ -10,7 +10,10 @@ import type {
 } from "@/lib/studio/types";
 import {
   edgeSnap,
+  groupBounds,
+  groupMemberIds,
   pointInPolygon,
+  rotateAround,
   shapeBounds,
   shapeWorldVertices,
 } from "@/lib/studio/geometry";
@@ -23,8 +26,19 @@ const SNAP_THRESHOLD_IN = 3;
 type Viewport = { zoom: number; pan: Point };
 
 type DragState =
-  | { kind: "move"; id: string; startImg: Point; orig: Shape["transform"] }
-  | { kind: "rotate"; id: string }
+  | {
+      kind: "move";
+      ids: string[];
+      startImg: Point;
+      origs: Map<string, Shape["transform"]>;
+    }
+  | {
+      kind: "rotate";
+      ids: string[];
+      pivot: Point;
+      startAngle: number;
+      origs: Map<string, Shape["transform"]>;
+    }
   | null;
 
 type CalibState =
@@ -37,8 +51,8 @@ type PendingShape = { type: "polygon"; name: string; color: string } | null;
 type Props = {
   shapes: Shape[];
   setShapes: React.Dispatch<React.SetStateAction<Shape[]>>;
-  selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
+  selectedIds: string[];
+  setSelectedIds: React.Dispatch<React.SetStateAction<string[]>>;
   calibration: Calibration | null;
   setCalibration: (c: Calibration | null) => void;
   floorPlan: FloorPlanImage;
@@ -56,7 +70,7 @@ type Props = {
 export function Canvas(props: Props) {
   const {
     shapes, setShapes,
-    selectedId, setSelectedId,
+    selectedIds, setSelectedIds,
     calibration, setCalibration,
     floorPlan,
     gridOn, snapOn,
@@ -128,10 +142,33 @@ export function Canvas(props: Props) {
         }
       }
       if (hit) {
-        setSelectedId(hit.id);
-        setDrag({ kind: "move", id: hit.id, startImg: p, orig: { ...hit.transform } });
+        // Resolve the IDs we'll act on: if the hit shape is in a group,
+        // act on the whole group; otherwise just this shape.
+        const targetIds = groupMemberIds(shapes, hit.id);
+
+        if (e.shiftKey) {
+          // Shift toggles this shape's group membership in the selection.
+          setSelectedIds((prev) => {
+            const anyInPrev = targetIds.some((id) => prev.includes(id));
+            if (anyInPrev) return prev.filter((id) => !targetIds.includes(id));
+            return [...prev, ...targetIds.filter((id) => !prev.includes(id))];
+          });
+        } else {
+          // Replace selection with the hit's group (or just it).
+          setSelectedIds(targetIds);
+        }
+
+        // Begin moving everything in the (post-click) selection. We use targetIds
+        // because the React state update above hasn't applied yet.
+        const dragIds = e.shiftKey ? selectedIds.includes(hit.id) ? selectedIds : [...selectedIds, ...targetIds] : targetIds;
+        const origs = new Map<string, Shape["transform"]>();
+        for (const id of dragIds) {
+          const s = shapes.find((x) => x.id === id);
+          if (s) origs.set(id, { ...s.transform });
+        }
+        setDrag({ kind: "move", ids: dragIds, startImg: p, origs });
       } else {
-        setSelectedId(null);
+        if (!e.shiftKey) setSelectedIds([]);
       }
     }
   }
@@ -142,34 +179,62 @@ export function Canvas(props: Props) {
     if (!drag) return;
 
     if (drag.kind === "move") {
-      const dxIn = pxToInch(p.x - drag.startImg.x);
-      const dyIn = pxToInch(p.y - drag.startImg.y);
+      const dxInRaw = pxToInch(p.x - drag.startImg.x);
+      const dyInRaw = pxToInch(p.y - drag.startImg.y);
+
+      // Compute a single snap delta if exactly one shape is being moved; for
+      // multi-shape drags, snap is not applied (would need fixed reference).
+      let dxIn = dxInRaw;
+      let dyIn = dyInRaw;
+      if (snapOn && drag.ids.length === 1) {
+        const id = drag.ids[0];
+        const orig = drag.origs.get(id)!;
+        const movingShape = shapes.find((s) => s.id === id);
+        if (movingShape) {
+          const candidate: Shape = {
+            ...movingShape,
+            transform: { ...movingShape.transform, x: orig.x + dxInRaw, y: orig.y + dyInRaw },
+          };
+          const snap = edgeSnap(candidate, shapes, SNAP_THRESHOLD_IN);
+          dxIn += snap.dx;
+          dyIn += snap.dy;
+        }
+      }
+
+      const idSet = new Set(drag.ids);
       setShapes((prev) =>
         prev.map((s) => {
-          if (s.id !== drag.id) return s;
-          let nx = drag.orig.x + dxIn;
-          let ny = drag.orig.y + dyIn;
-          const candidate: Shape = { ...s, transform: { ...s.transform, x: nx, y: ny } };
-          if (snapOn) {
-            const snap = edgeSnap(candidate, prev, SNAP_THRESHOLD_IN);
-            nx += snap.dx;
-            ny += snap.dy;
-          }
-          return { ...s, transform: { ...s.transform, x: nx, y: ny } };
+          if (!idSet.has(s.id)) return s;
+          const orig = drag.origs.get(s.id);
+          if (!orig) return s;
+          return { ...s, transform: { ...s.transform, x: orig.x + dxIn, y: orig.y + dyIn } };
         })
       );
       return;
     }
 
     if (drag.kind === "rotate") {
-      const shape = shapes.find((s) => s.id === drag.id);
-      if (!shape || !ppi) return;
-      const center = { x: inchToPx(shape.transform.x), y: inchToPx(shape.transform.y) };
-      const a = Math.atan2(p.y - center.y, p.x - center.x);
-      let deg = (a * 180) / Math.PI + 90;
-      if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+      const a = Math.atan2(p.y - drag.pivot.y, p.x - drag.pivot.x);
+      let deltaDeg = (a - drag.startAngle) * (180 / Math.PI);
+      if (e.shiftKey) deltaDeg = Math.round(deltaDeg / 15) * 15;
+      const idSet = new Set(drag.ids);
+      const pivotIn = { x: pxToInch(drag.pivot.x), y: pxToInch(drag.pivot.y) };
       setShapes((prev) =>
-        prev.map((s) => (s.id === drag.id ? { ...s, transform: { ...s.transform, rotation: deg } } : s))
+        prev.map((s) => {
+          if (!idSet.has(s.id)) return s;
+          const orig = drag.origs.get(s.id);
+          if (!orig) return s;
+          const np = rotateAround({ x: orig.x, y: orig.y }, pivotIn, deltaDeg);
+          return {
+            ...s,
+            transform: {
+              ...s.transform,
+              x: np.x,
+              y: np.y,
+              rotation: (orig.rotation || 0) + deltaDeg,
+            },
+          };
+        })
       );
     }
   }
@@ -311,14 +376,70 @@ export function Canvas(props: Props) {
             key={s.id}
             shape={s}
             ppi={ppi}
-            selected={s.id === selectedId}
+            selected={selectedIds.includes(s.id)}
             zoom={viewport.zoom}
-            onStartRotate={(e) => {
-              e.stopPropagation();
-              setDrag({ kind: "rotate", id: s.id });
-            }}
           />
         ))}
+
+        {/* one rotate handle for the whole selection, sitting above the combined bbox */}
+        {ppi && selectedIds.length > 0 && (() => {
+          const members = shapes.filter((s) => selectedIds.includes(s.id));
+          if (members.length === 0) return null;
+          const gb = groupBounds(members);
+          const cx = gb.cx * ppi;
+          const top = gb.minY * ppi;
+          const handleX = cx;
+          const handleY = top - ROTATE_HANDLE_OFFSET / viewport.zoom;
+          const stroke = 1 / viewport.zoom;
+          const handleR = HANDLE_PX / viewport.zoom / 2;
+          return (
+            <g pointerEvents="none">
+              <line
+                x1={cx}
+                y1={top - 6 / viewport.zoom}
+                x2={cx}
+                y2={handleY}
+                stroke="#7ad7ff"
+                strokeWidth={stroke}
+              />
+              {members.length > 1 && (
+                // outline the combined group bbox so it reads as a group selection
+                <rect
+                  x={gb.minX * ppi - 6 / viewport.zoom}
+                  y={gb.minY * ppi - 6 / viewport.zoom}
+                  width={(gb.maxX - gb.minX) * ppi + 12 / viewport.zoom}
+                  height={(gb.maxY - gb.minY) * ppi + 12 / viewport.zoom}
+                  fill="none"
+                  stroke="#7ad7ff"
+                  strokeOpacity={0.7}
+                  strokeWidth={stroke}
+                  strokeDasharray={`${6 / viewport.zoom} ${4 / viewport.zoom}`}
+                />
+              )}
+              <circle
+                cx={handleX}
+                cy={handleY}
+                r={handleR * 0.9}
+                fill="#7ad7ff"
+                data-role="handle"
+                pointerEvents="all"
+                style={{ cursor: "grab" }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  const ids = [...selectedIds];
+                  const ms = shapes.filter((s) => ids.includes(s.id));
+                  const pivotIn = groupBounds(ms);
+                  const pivotPx = { x: pivotIn.cx * ppi, y: pivotIn.cy * ppi };
+                  const startP = svgPointFromEvent(e);
+                  const startAngle = Math.atan2(startP.y - pivotPx.y, startP.x - pivotPx.x);
+                  const origs = new Map<string, Shape["transform"]>();
+                  for (const s of ms) origs.set(s.id, { ...s.transform });
+                  setDrag({ kind: "rotate", ids, pivot: pivotPx, startAngle, origs });
+                }}
+              />
+            </g>
+          );
+        })()}
 
         {/* polygon preview */}
         {tool === "polygon-draw" && polyPoints.length > 0 && ppi && (
@@ -389,13 +510,11 @@ function ShapeView({
   ppi,
   selected,
   zoom,
-  onStartRotate,
 }: {
   shape: Shape;
   ppi: number | null;
   selected: boolean;
   zoom: number;
-  onStartRotate: (e: React.PointerEvent) => void;
 }) {
   if (!ppi) return null;
   const verts = shapeWorldVertices(shape);
@@ -409,7 +528,6 @@ function ShapeView({
   const cy = b.cy * ppi;
   const widthIn = b.maxX - b.minX;
   const heightIn = b.maxY - b.minY;
-  const handleR = HANDLE_PX / zoom / 2;
   const stroke = 2 / zoom;
 
   return (
@@ -476,24 +594,6 @@ function ShapeView({
             stroke="#7ad7ff"
             strokeWidth={1 / zoom}
             strokeDasharray={`${4 / zoom} ${3 / zoom}`}
-          />
-          <line
-            x1={cx}
-            y1={by - 6 / zoom}
-            x2={cx}
-            y2={by - ROTATE_HANDLE_OFFSET / zoom}
-            stroke="#7ad7ff"
-            strokeWidth={1 / zoom}
-          />
-          <circle
-            cx={cx}
-            cy={by - ROTATE_HANDLE_OFFSET / zoom}
-            r={handleR * 0.9}
-            fill="#7ad7ff"
-            data-role="handle"
-            onPointerDown={onStartRotate}
-            pointerEvents="all"
-            style={{ cursor: "grab" }}
           />
         </g>
       )}
