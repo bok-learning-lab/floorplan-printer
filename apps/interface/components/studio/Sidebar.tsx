@@ -90,6 +90,7 @@ export function Sidebar(p: Props) {
         </div>
       </div>
 
+      <div className="sidebar-body">
       {!p.calibration && (
         <div className="callout">
           <div className="callout-label">⌖ start here</div>
@@ -206,6 +207,7 @@ export function Sidebar(p: Props) {
           </div>
         </Section>
       )}
+      </div>
 
       <div className="sidebar-foot">
         <div className="foot-buttons">

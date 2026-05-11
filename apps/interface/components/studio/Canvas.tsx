@@ -23,7 +23,6 @@ const SNAP_THRESHOLD_IN = 3;
 type Viewport = { zoom: number; pan: Point };
 
 type DragState =
-  | { kind: "pan"; startClient: Point; startPan: Point }
   | { kind: "move"; id: string; startImg: Point; orig: Shape["transform"] }
   | { kind: "rotate"; id: string }
   | null;
@@ -98,38 +97,11 @@ export function Canvas(props: Props) {
   const vbY = -viewport.pan.y / viewport.zoom;
   const viewBox = `${vbX} ${vbY} ${vbWidth} ${vbHeight}`;
 
-  // wheel-zoom — bind via DOM ref to get a non-passive listener
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    function onWheel(e: WheelEvent) {
-      e.preventDefault();
-      const p = svgPointFromEvent(e);
-      const dz = Math.exp(-e.deltaY * 0.0015);
-      setViewport((v) => {
-        const newZoom = Math.max(0.3, Math.min(8, v.zoom * dz));
-        const factor = newZoom / v.zoom;
-        const oldVbX = -v.pan.x / v.zoom;
-        const oldVbY = -v.pan.y / v.zoom;
-        const newPanX = p.x - (p.x - -oldVbX) * factor;
-        const newPanY = p.y - (p.y - -oldVbY) * factor;
-        return { zoom: newZoom, pan: { x: -newPanX, y: -newPanY } };
-      });
-    }
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
-  }, [svgPointFromEvent, setViewport]);
-
-  // pointer down
+  // pointer down (zoom + pan intentionally disabled — see request to keep the plan static)
   function handlePointerDown(e: React.PointerEvent<SVGSVGElement>) {
     const target = e.target as Element;
     if ((target as HTMLElement).dataset?.role === "handle") return;
     const p = svgPointFromEvent(e);
-
-    if (tool === "pan" || e.button === 1 || e.shiftKey) {
-      setDrag({ kind: "pan", startClient: { x: e.clientX, y: e.clientY }, startPan: { ...viewport.pan } });
-      return;
-    }
 
     if (tool === "calibrate") {
       if (!calibState || calibState.stage === "distance") {
@@ -168,13 +140,6 @@ export function Canvas(props: Props) {
     const p = svgPointFromEvent(e);
     setHoverImg(p);
     if (!drag) return;
-
-    if (drag.kind === "pan") {
-      const dx = e.clientX - drag.startClient.x;
-      const dy = e.clientY - drag.startClient.y;
-      setViewport((v) => ({ ...v, pan: { x: drag.startPan.x + dx, y: drag.startPan.y + dy } }));
-      return;
-    }
 
     if (drag.kind === "move") {
       const dxIn = pxToInch(p.x - drag.startImg.x);
@@ -296,7 +261,7 @@ export function Canvas(props: Props) {
   return (
     <div
       className="canvas-wrap"
-      style={{ cursor: tool === "pan" ? "grab" : drag?.kind === "pan" ? "grabbing" : "crosshair" }}
+      style={{ cursor: "crosshair" }}
     >
       <svg
         ref={svgRef}
@@ -384,7 +349,6 @@ export function Canvas(props: Props) {
           ) : (
             <>not calibrated</>
           )}
-          &nbsp;·&nbsp;zoom <b>{(viewport.zoom * 100).toFixed(0)}%</b>
         </div>
         {tool === "calibrate" && (
           <CalibrationPrompt
