@@ -1062,3 +1062,217 @@ body {
   text-align: right;
   letter-spacing: 0.08em;
 }
+
+/* ─── homepage chooser ───────────────────────────────────────────────────── */
+.studio.choose-screen {
+  display: grid;
+  place-items: center;
+  background: var(--bp-deep);
+  padding: 32px;
+}
+.choose-card {
+  width: min(720px, 100%);
+  background: linear-gradient(180deg, #08243d, #0c3358 50%, #08233c);
+  border: 1px solid var(--rule);
+  padding: 36px 36px 28px;
+  position: relative;
+}
+.choose-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 24px);
+  pointer-events: none;
+}
+.choose-card > * { position: relative; z-index: 1; }
+.choose-brand { margin-bottom: 28px; }
+.choose-title {
+  font-family: var(--font-disp);
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 14px;
+}
+.choose-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+@media (max-width: 640px) {
+  .choose-options { grid-template-columns: 1fr; }
+}
+.choose-option {
+  display: flex;
+  flex-direction: column;
+  padding: 20px 18px 16px;
+  border: 1px solid var(--rule);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink-white);
+  text-decoration: none;
+  transition: background 0.12s, border-color 0.12s;
+  min-height: 220px;
+}
+.choose-option:hover {
+  background: rgba(255, 204, 102, 0.07);
+  border-color: rgba(255, 204, 102, 0.5);
+}
+.choose-option-num {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.choose-option-head {
+  font-family: var(--font-disp);
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+}
+.choose-option-body {
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.5;
+  margin-bottom: auto;
+}
+.choose-option-cta {
+  margin-top: 14px;
+  font-family: var(--font-tech);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--accent-2);
+}
+.choose-foot {
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+}
+
+/* ─── printed studio: re-use almost everything from .studio ─────────────── */
+/* The print document floats above the studio app when printing. */
+.print-doc { display: none; }
+.studio.is-printing .print-doc { display: block; }
+.studio.is-printing .sidebar,
+.studio.is-printing .main { display: none; }
+
+@media print {
+  @page {
+    size: letter portrait;
+    margin: 0.5in;
+  }
+  body { background: white !important; color: black !important; overflow: visible !important; }
+  .studio { position: static; height: auto; display: block; background: white !important; }
+  .studio .sidebar, .studio .main { display: none !important; }
+  .studio .print-doc { display: block !important; }
+}
+
+.print-doc {
+  background: white;
+  color: #111;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 11px;
+}
+.print-page {
+  width: 7.5in; /* usable area; @page already provides the 0.5in margins */
+  height: 10in;
+  page-break-after: always;
+  break-after: page;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.print-page:last-child {
+  page-break-after: auto;
+}
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+.page-header b {
+  font-family: "Special Elite", "Courier New", monospace;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+.page-header-meta { color: #777; letter-spacing: 0.04em; }
+.page-canvas {
+  flex: 1;
+  display: block;
+  overflow: hidden;
+}
+.page-canvas svg { display: block; }
+.page-foot {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 9px;
+  color: #777;
+  letter-spacing: 0.05em;
+}
+
+/* Cover sheet */
+.print-cover {
+  display: block;
+  padding: 0;
+}
+.cover-rule {
+  height: 4px;
+  width: 60px;
+  background: #111;
+  margin-bottom: 18px;
+}
+.cover-title {
+  font-family: "Special Elite", "Courier New", monospace;
+  font-size: 28px;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+.cover-sub {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 28px;
+}
+.cover-meta {
+  display: grid;
+  grid-template-columns: 1.2in 1fr;
+  gap: 6px 14px;
+  font-size: 11px;
+  border-top: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
+  padding: 14px 0;
+  margin-bottom: 24px;
+}
+.cover-meta dt {
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #888;
+  font-size: 9px;
+  align-self: center;
+}
+.cover-meta dd { margin: 0; }
+.cover-steps {
+  margin: 0 0 28px;
+  padding-left: 1.2em;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.cover-steps li { margin-bottom: 4px; }
+.cover-stamp {
+  margin-top: auto;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: #888;
+  text-align: right;
+}
